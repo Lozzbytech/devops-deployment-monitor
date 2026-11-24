@@ -1,0 +1,33 @@
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo 'Checking out source code from GitHub'
+                checkout scm
+            }
+        }
+
+        stage('Environment Check') {
+            steps {
+                echo 'Checking Jenkins build environment'
+
+                sh 'whoami'
+                sh 'git --version'
+                sh 'java --version'
+
+                echo 'Environment check completed'
+            }
+        }
+
+        stage('Build Information') {
+            steps {
+                echo "Build Number: ${BUILD_NUMBER}"
+                echo "Job Name: ${JOB_NAME}"
+                echo "Workspace: ${WORKSPACE}"
+            }
+        }
+    }
+}
