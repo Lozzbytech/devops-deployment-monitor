@@ -25,10 +25,7 @@ ENV VITE_APP_VERSION=$VITE_APP_VERSION \
 
 RUN npm run build
 
-# ---------------------------------------------------------------------------
-FROM nginx:1.27-alpine AS production
 
-# Custom nginx configuration (SPA routing + API proxy)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 

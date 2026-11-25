@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Production image for the DevOps Monitor backend
 # ---------------------------------------------------------------------------
-FROM node:20-alpine
+FROM node:24-alpine
 
 # Create a non-root user for better security
 RUN addgroup -S app && adduser -S app -G app
