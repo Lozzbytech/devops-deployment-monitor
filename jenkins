@@ -21,7 +21,7 @@ environment {
 
 stages {
 
-    stage('Checkout') {
+           stage('Checkout') {
         steps {
             echo 'Checking out application source code'
             checkout scm
@@ -225,6 +225,8 @@ stages {
     }
 }
 
+
+
 post {
 
     success {
@@ -248,6 +250,6 @@ post {
         echo "Build Number: ${BUILD_NUMBER}"
         echo "Job Name: ${JOB_NAME}"
     }
-}
+    }
 
 }
