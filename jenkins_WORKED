@@ -1,0 +1,159 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = 'ap-south-1'
+        AWS_ACCOUNT_ID = '024534508687'
+        ECR_FRONTEND = 'devops-monitor-frontend'
+        ECR_BACKEND = 'devops-monitor-backend'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo 'Checking out source code from GitHub'
+                checkout scm
+            }
+        }
+
+        stage('Environment Check') {
+            steps {
+                echo 'Checking Jenkins build environment'
+
+                sh 'whoami'
+                sh 'git --version'
+                sh 'java --version'
+                sh 'node --version'
+                sh 'npm --version'
+                sh 'docker --version'
+                sh 'aws --version'
+
+                echo 'Environment check completed'
+            }
+        }
+
+        stage('Frontend Install') {
+            steps {
+                dir('frontend') {
+                    sh 'npm install'
+                }
+            }
+        }
+
+        stage('Frontend Build') {
+            steps {
+                dir('frontend') {
+                    sh 'npm run build'
+                }
+            }
+        }
+
+        stage('Backend Install') {
+            steps {
+                dir('backend') {
+                    sh 'npm install'
+                }
+            }
+        }
+
+        stage('Backend Validation') {
+            steps {
+                dir('backend') {
+                    sh 'node --check src/server.js'
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    def scannerHome = tool 'SonarScanner'
+
+                    withSonarQubeEnv('sonarqube') {
+                        sh """
+                            ${scannerHome}/bin/sonar-scanner \
+                              -Dsonar.projectKey=devops-deployment-monitor \
+                              -Dsonar.projectName="DevOps Deployment Monitor" \
+                              -Dsonar.sources=frontend/src,backend/src \
+                              -Dsonar.exclusions=**/node_modules/**,**/dist/** \
+                              -Dsonar.sourceEncoding=UTF-8
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Build Information') {
+            steps {
+                echo "Build Number: ${BUILD_NUMBER}"
+                echo "Job Name: ${JOB_NAME}"
+                echo "Workspace: ${WORKSPACE}"
+                echo "Commit: ${GIT_COMMIT}"
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    sh """
+                        docker build -t ${ECR_FRONTEND}:${IMAGE_TAG} ./frontend
+                        docker build -t ${ECR_BACKEND}:${IMAGE_TAG} ./backend
+
+                        docker tag ${ECR_FRONTEND}:${IMAGE_TAG} ${ECR_FRONTEND}:latest
+                        docker tag ${ECR_BACKEND}:${IMAGE_TAG} ${ECR_BACKEND}:latest
+                    """
+                }
+            }
+        }
+
+        stage('ECR Login') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} |
+                    docker login --username AWS --password-stdin \
+                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                """
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    docker tag ${ECR_FRONTEND}:${IMAGE_TAG} \
+                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${IMAGE_TAG}
+
+                    docker tag ${ECR_BACKEND}:${IMAGE_TAG} \
+                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${IMAGE_TAG}
+
+                    docker tag ${ECR_FRONTEND}:latest \
+                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:latest
+
+                    docker tag ${ECR_BACKEND}:latest \
+                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:latest
+
+                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${IMAGE_TAG}
+                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${IMAGE_TAG}
+
+                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:latest
+                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:latest
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'CI/CD Pipeline completed successfully! Docker images pushed to ECR.'
+        }
+
+        failure {
+            echo 'Pipeline failed. Check the stage logs.'
+        }
+    }
+}
