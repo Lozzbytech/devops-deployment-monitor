@@ -29,7 +29,7 @@ pipeline {
                  script {
                    def scannerHome = tool 'SonarScanner'
 
-                 withSonarQubeEnv('Sonarqube') {
+                 withSonarQubeEnv('sonarqube') {
                   sh """
                     ${scannerHome}/bin/sonar-scanner \
                       -Dsonar.projectKey=devops-deployment-monitor \
