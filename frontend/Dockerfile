@@ -18,21 +18,20 @@ ARG VITE_BUILD_NUMBER=1
 ARG VITE_GIT_COMMIT=local
 ARG VITE_APP_MESSAGE="Deployed via Jenkins + Argo CD"
 
-ENV VITE_APP_VERSION=$VITE_APP_VERSION 
-    VITE_BUILD_NUMBER=$VITE_BUILD_NUMBER 
-    VITE_GIT_COMMIT=$VITE_GIT_COMMIT 
-    VITE_APP_MESSAGE=$VITE_APP_MESSAGE
+ENV VITE_APP_VERSION=${VITE_APP_VERSION}
+ENV VITE_BUILD_NUMBER=${VITE_BUILD_NUMBER}
+ENV VITE_GIT_COMMIT=${VITE_GIT_COMMIT}
+ENV VITE_APP_MESSAGE=${VITE_APP_MESSAGE}
 
 # Build React application
 RUN npm run build
-
 
 # ---------------------------------------------------------------------------
 # Stage 2: Production Nginx server
 # ---------------------------------------------------------------------------
 FROM nginx:alpine AS production
 
-# Copy custom Nginx configuration
+# Copy Nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy compiled React application
@@ -40,8 +39,8 @@ COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80
 
-# Container health check
+# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 
-  CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
