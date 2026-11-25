@@ -156,96 +156,70 @@ stages {
     }
 
     stage('Update GitOps Repository') {
-        steps {
-
+    steps {
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'github-gitops-credentials',
+                usernameVariable: 'GIT_USERNAME',
+                passwordVariable: 'GIT_TOKEN'
+            )
+        ]) {
             dir('gitops') {
                 deleteDir()
-            }
 
-            withCredentials([
-                usernamePassword(
-                    credentialsId: 'github-gitops-credentials',
-                    usernameVariable: 'GIT_USERNAME',
-                    passwordVariable: 'GIT_TOKEN'
-                )
-            ]) {
+                sh '''
+                    set -eu
 
-                dir('gitops') {
+                    git clone \
+                        --branch "$GITOPS_BRANCH" \
+                        --single-branch \
+                        "$GITOPS_REPO" .
+                '''
 
-                    sh '''
-                        set -eu
+                sh '''
+                    set -eu
 
-                        ASKPASS_SCRIPT=$(mktemp)
+                    FRONTEND_FILE="kubernetes/app/frontend-deployment.yaml"
+                    BACKEND_FILE="kubernetes/app/backend-deployment.yaml"
 
-                        trap 'rm -f "$ASKPASS_SCRIPT"' EXIT
+                    test -f "$FRONTEND_FILE"
+                    test -f "$BACKEND_FILE"
 
-                        cat > "$ASKPASS_SCRIPT" <<'EOF'
+                    sed -i -E \
+                    "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-frontend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}|" \
+                    "$FRONTEND_FILE"
 
-#!/bin/sh
-case "$1" in
-Username)
-printf '%s\n' "$GIT_USERNAME"
-;;
-Password)
-printf '%s\n' "$GIT_TOKEN"
-;;
-*)
-exit 1
-;;
-esac
-EOF
+                    sed -i -E \
+                    "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-backend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}|" \
+                    "$BACKEND_FILE"
 
-                        chmod 700 "$ASKPASS_SCRIPT"
+                    grep -F "${ECR_FRONTEND}:${IMAGE_TAG}" "$FRONTEND_FILE"
+                    grep -F "${ECR_BACKEND}:${IMAGE_TAG}" "$BACKEND_FILE"
 
-                        export GIT_ASKPASS="$ASKPASS_SCRIPT"
-                        export GIT_TERMINAL_PROMPT=0
+                    git config user.name "Jenkins CI"
+                    git config user.email "jenkins@users.noreply.github.com"
 
-                        echo "Cloning GitOps repository"
+                    git add "$FRONTEND_FILE" "$BACKEND_FILE"
 
-                        git clone \
-                            --branch "$GITOPS_BRANCH" \
-                            --single-branch \
-                            "$GITOPS_REPO" .
+                    if git diff --cached --quiet; then
+                        echo "No changes to commit."
+                    else
+                        git commit -m "Deploy application images ${IMAGE_TAG}"
+                    fi
+                '''
 
-                        FRONTEND_FILE="kubernetes/app/frontend-deployment.yaml"
-                        BACKEND_FILE="kubernetes/app/backend-deployment.yaml"
+                sh '''
+                    set +x
 
-                        test -f "$FRONTEND_FILE"
-                        test -f "$BACKEND_FILE"
+                    AUTH_HEADER=$(printf "%s:%s" "$GIT_USERNAME" "$GIT_TOKEN" | base64 | tr -d '\\n')
 
-                        echo "Updating frontend image"
+                    git -c http.extraheader="AUTHORIZATION: basic ${AUTH_HEADER}" \
+                        push origin "$GITOPS_BRANCH"
 
-                        sed -i -E \
-                            "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-frontend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}|" \
-                            "$FRONTEND_FILE"
+                    unset AUTH_HEADER
 
-                        echo "Updating backend image"
-
-                        sed -i -E \
-                            "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-backend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}|" \
-                            "$BACKEND_FILE"
-
-                        echo "Verifying updated image references"
-
-                        grep -F "${ECR_FRONTEND}:${IMAGE_TAG}" "$FRONTEND_FILE"
-                        grep -F "${ECR_BACKEND}:${IMAGE_TAG}" "$BACKEND_FILE"
-
-                        git config user.name "Jenkins CI"
-                        git config user.email "jenkins@users.noreply.github.com"
-
-                        git add "$FRONTEND_FILE" "$BACKEND_FILE"
-
-                        if git diff --cached --quiet; then
-                            echo "No GitOps changes detected"
-                        else
-                            git commit -m "Deploy application images ${IMAGE_TAG}"
-
-                            git push origin "$GITOPS_BRANCH"
-
-                            echo "GitOps repository updated successfully"
-                        fi
-                    '''
-                }
+                    echo "GitOps repository push successful."
+                '''
             }
         }
     }
