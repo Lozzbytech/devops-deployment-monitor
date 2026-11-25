@@ -251,5 +251,3 @@ post {
         echo "Job Name: ${JOB_NAME}"
     }
     }
-
-    
