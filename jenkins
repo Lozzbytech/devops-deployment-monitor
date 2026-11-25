@@ -19,9 +19,8 @@ environment {
     GITOPS_CREDENTIALS = 'github-gitops-credentials'
 }
 
-stages {
-
-           stage('Checkout') {
+stages { 
+stage('Checkout') {
         steps {
             echo 'Checking out application source code'
             checkout scm
@@ -250,4 +249,5 @@ post {
         echo "Build Number: ${BUILD_NUMBER}"
         echo "Job Name: ${JOB_NAME}"
     }
-    }
+  }
+}
