@@ -26,18 +26,22 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
-            withSonarQubeEnv('sonarqube') {
-            sh '''
-                sonar-scanner \
-                  -Dsonar.projectKey=devops-deployment-monitor \
-                  -Dsonar.projectName="DevOps Deployment Monitor" \
-                  -Dsonar.sources=frontend/src,backend/src \
-                  -Dsonar.exclusions=**/node_modules/**,**/dist/** \
-                  -Dsonar.sourceEncoding=UTF-8
-            '''
-                                            }
-              }
+                 script {
+                   def scannerHome = tool 'SonarScanner'
+
+                 withSonarQubeEnv('SonarQube') {
+                  sh """
+                    ${scannerHome}/bin/sonar-scanner \
+                      -Dsonar.projectKey=devops-deployment-monitor \
+                      -Dsonar.projectName="DevOps Deployment Monitor" \
+                      -Dsonar.sources=frontend/src,backend/src \
+                      -Dsonar.exclusions=**/node_modules/**,**/dist/** \
+                      -Dsonar.sourceEncoding=UTF-8
+                """
+            }
         }
+    }
+}
 
         stage('Frontend Install') {
             steps {
