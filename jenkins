@@ -1,253 +1,292 @@
 pipeline {
-agent any
+    agent any
 
-options {
-    timestamps()
-    disableConcurrentBuilds()
-}
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
 
-environment {
-    AWS_REGION = 'ap-south-1'
-    AWS_ACCOUNT_ID = '024534508687'
-    ECR_REGISTRY = '024534508687.dkr.ecr.ap-south-1.amazonaws.com'
+    environment {
+        AWS_REGION       = 'ap-south-1'
+        AWS_ACCOUNT_ID   = '024534508687'
+        ECR_REGISTRY    = '024534508687.dkr.ecr.ap-south-1.amazonaws.com'
 
-    ECR_FRONTEND = 'devops-monitor-frontend'
-    ECR_BACKEND = 'devops-monitor-backend'
+        ECR_FRONTEND    = 'devops-monitor-frontend'
+        ECR_BACKEND     = 'devops-monitor-backend'
 
-    GITOPS_REPO = 'https://github.com/Lozzbytech/devops-monitor-gitops.git'
-    GITOPS_BRANCH = 'main'
-    GITOPS_CREDENTIALS = 'github-gitops-credentials'
-}
+        GITOPS_REPO    = 'https://github.com/Lozzbytech/devops-monitor-gitops.git'
+        GITOPS_BRANCH  = 'main'
+    }
 
-stages {
+    stages {
 
-           stage('Checkout') {
-        steps {
-            echo 'Checking out application source code'
-            checkout scm
+        // 1. Checkout application repository
+        stage('Checkout') {
+            steps {
+                checkout scm
 
-            script {
-                env.IMAGE_TAG = sh(
-                    script: 'git rev-parse --short=12 HEAD',
-                    returnStdout: true
-                ).trim()
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: 'git rev-parse --short=12 HEAD',
+                        returnStdout: true
+                    ).trim()
 
-                echo "Image tag: ${env.IMAGE_TAG}"
+                    echo "Building application commit: ${IMAGE_TAG}"
+                }
             }
         }
-    }
 
-    stage('Environment Check') {
-        steps {
-            sh '''
-                set -e
-                whoami
-                git --version
-                java --version
-                node --version
-                npm --version
-                docker --version
-                aws --version
-            '''
-        }
-    }
+        // 2. Verify build environment
+        stage('Environment Check') {
+            steps {
+                sh '''
+                    set -eu
 
-    stage('Frontend Install') {
-        steps {
-            dir('frontend') {
-                sh 'npm install'
+                    echo "User:"
+                    whoami
+
+                    echo "Tool versions:"
+                    git --version
+                    java --version
+                    node --version
+                    npm --version
+                    docker --version
+                    aws --version
+                '''
             }
         }
-    }
 
-    stage('Frontend Build') {
-        steps {
-            dir('frontend') {
-                sh 'npm run build'
+        // 3. Install frontend dependencies
+        stage('Frontend Install') {
+            steps {
+                dir('frontend') {
+                    sh '''
+                        if [ -f package-lock.json ]; then
+                            npm ci
+                        else
+                            npm install
+                        fi
+                    '''
+                }
             }
         }
-    }
 
-    stage('Backend Install') {
-        steps {
-            dir('backend') {
-                sh 'npm install'
+        // 4. Build frontend
+        stage('Frontend Build') {
+            steps {
+                dir('frontend') {
+                    sh 'npm run build'
+                }
             }
         }
-    }
 
-    stage('Backend Validation') {
-        steps {
-            dir('backend') {
-                sh 'node --check src/server.js'
+        // 5. Install backend dependencies
+        stage('Backend Install') {
+            steps {
+                dir('backend') {
+                    sh '''
+                        if [ -f package-lock.json ]; then
+                            npm ci
+                        else
+                            npm install
+                        fi
+                    '''
+                }
             }
         }
-    }
 
-    stage('SonarQube Analysis') {
-        steps {
-            script {
-                def scannerHome = tool 'SonarScanner'
+        // 6. Validate backend syntax
+        stage('Backend Validation') {
+            steps {
+                dir('backend') {
+                    sh 'node --check src/server.js'
+                }
+            }
+        }
 
-                withSonarQubeEnv('sonarqube') {
-                    sh """
-                        ${scannerHome}/bin/sonar-scanner \
-                            -Dsonar.projectKey=devops-deployment-monitor \
-                            -Dsonar.projectName="DevOps Deployment Monitor" \
-                            -Dsonar.sources=frontend/src,backend/src \
-                            -Dsonar.exclusions=**/node_modules/**,**/dist/** \
-                            -Dsonar.sourceEncoding=UTF-8
-                    """
+        // 7. SonarQube code analysis
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    def scannerHome = tool 'SonarScanner'
+
+                    withSonarQubeEnv('sonarqube') {
+                        sh """
+                            ${scannerHome}/bin/sonar-scanner \
+                                -Dsonar.projectKey=devops-deployment-monitor \
+                                -Dsonar.projectName="DevOps Deployment Monitor" \
+                                -Dsonar.sources=frontend/src,backend/src \
+                                -Dsonar.exclusions=**/node_modules/**,**/dist/** \
+                                -Dsonar.sourceEncoding=UTF-8
+                        """
+                    }
+                }
+            }
+        }
+
+        // 8. Build Docker images
+        stage('Docker Build') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker build \
+                        -t ${ECR_FRONTEND}:${IMAGE_TAG} \
+                        ./frontend
+
+                    docker build \
+                        -t ${ECR_BACKEND}:${IMAGE_TAG} \
+                        ./backend
+                '''
+            }
+        }
+
+        // 9. Authenticate with AWS ECR
+        stage('ECR Login') {
+            steps {
+                sh '''
+                    set -eu
+
+                    aws ecr get-login-password --region ${AWS_REGION} |
+                    docker login \
+                        --username AWS \
+                        --password-stdin ${ECR_REGISTRY}
+                '''
+            }
+        }
+
+        // 10. Push Docker images
+        stage('Push to ECR') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker tag \
+                        ${ECR_FRONTEND}:${IMAGE_TAG} \
+                        ${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}
+
+                    docker tag \
+                        ${ECR_BACKEND}:${IMAGE_TAG} \
+                        ${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}
+
+                    docker push \
+                        ${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}
+
+                    docker push \
+                        ${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        // 11. Update GitOps repository
+        stage('Update GitOps Repository') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'github-gitops-credentials',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_TOKEN'
+                    )
+                ]) {
+                    dir('gitops') {
+                        deleteDir()
+
+                        sh '''
+                            set -eu
+
+                            git clone \
+                                --branch "${GITOPS_BRANCH}" \
+                                --single-branch \
+                                "${GITOPS_REPO}" .
+                        '''
+
+                        sh '''
+                            set -eu
+
+                            FRONTEND_FILE="kubernetes/app/frontend-deployment.yaml"
+                            BACKEND_FILE="kubernetes/app/backend-deployment.yaml"
+
+                            test -f "$FRONTEND_FILE"
+                            test -f "$BACKEND_FILE"
+
+                            # Update frontend image tag
+                            sed -i -E \
+                                "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-frontend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}|" \
+                                "$FRONTEND_FILE"
+
+                            # Update backend image tag
+                            sed -i -E \
+                                "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-backend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}|" \
+                                "$BACKEND_FILE"
+
+                            # Verify image tags
+                            grep -F "${ECR_FRONTEND}:${IMAGE_TAG}" "$FRONTEND_FILE"
+                            grep -F "${ECR_BACKEND}:${IMAGE_TAG}" "$BACKEND_FILE"
+
+                            # Configure commit identity
+                            git config user.name "Jenkins CI"
+                            git config user.email "jenkins@users.noreply.github.com"
+
+                            git add "$FRONTEND_FILE" "$BACKEND_FILE"
+
+                            if git diff --cached --quiet; then
+                                echo "No GitOps manifest changes detected."
+                                exit 0
+                            fi
+
+                            git commit -m "Deploy application images ${IMAGE_TAG}"
+                        '''
+
+                        // GitHub authentication using Jenkins credentials
+                        sh '''
+                            set +x
+                            set -eu
+
+                            export GIT_TERMINAL_PROMPT=0
+
+                            git config credential.helper \
+                                '!f() { echo "username=$GIT_USERNAME"; echo "password=$GIT_TOKEN"; }; f'
+
+                            git push origin "${GITOPS_BRANCH}"
+
+                            git config --unset credential.helper || true
+
+                            echo "GitOps push completed."
+                        '''
+                    }
                 }
             }
         }
     }
 
-    stage('Docker Build') {
-        steps {
-            sh '''
-                set -e
+    post {
+        success {
+            echo """
+            ==========================================
+            PIPELINE COMPLETED SUCCESSFULLY
+            ==========================================
+            Build Number: ${BUILD_NUMBER}
+            Image Tag: ${IMAGE_TAG}
 
-                docker build \
-                    -t ${ECR_FRONTEND}:${IMAGE_TAG} \
-                    ./frontend
+            Frontend:
+            ${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}
 
-                docker build \
-                    -t ${ECR_BACKEND}:${IMAGE_TAG} \
-                    ./backend
-            '''
+            Backend:
+            ${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}
+
+            GitOps repository updated.
+            Argo CD will reconcile the deployment.
+            ==========================================
+            """
         }
-    }
 
-    stage('ECR Login') {
-        steps {
-            sh '''
-                set -e
-
-                aws ecr get-login-password \
-                    --region ${AWS_REGION} |
-                docker login \
-                    --username AWS \
-                    --password-stdin ${ECR_REGISTRY}
-            '''
+        failure {
+            echo 'Pipeline failed. Check the failed stage in Console Output.'
         }
-    }
 
-    stage('Push to ECR') {
-        steps {
-            sh '''
-                set -e
-
-                docker tag \
-                    ${ECR_FRONTEND}:${IMAGE_TAG} \
-                    ${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}
-
-                docker tag \
-                    ${ECR_BACKEND}:${IMAGE_TAG} \
-                    ${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}
-
-                docker push \
-                    ${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}
-
-                docker push \
-                    ${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}
-            '''
-        }
-    }
-
-    stage('Update GitOps Repository') {
-    steps {
-        withCredentials([
-            usernamePassword(
-                credentialsId: 'github-gitops-credentials',
-                usernameVariable: 'GIT_USERNAME',
-                passwordVariable: 'GIT_TOKEN'
-            )
-        ]) {
-            dir('gitops') {
-                deleteDir()
-
-                sh '''
-                    set -eu
-
-                    git clone \
-                        --branch "$GITOPS_BRANCH" \
-                        --single-branch \
-                        "$GITOPS_REPO" .
-                '''
-
-                sh '''
-                    set -eu
-
-                    FRONTEND_FILE="kubernetes/app/frontend-deployment.yaml"
-                    BACKEND_FILE="kubernetes/app/backend-deployment.yaml"
-
-                    test -f "$FRONTEND_FILE"
-                    test -f "$BACKEND_FILE"
-
-                    sed -i -E \
-                    "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-frontend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}|" \
-                    "$FRONTEND_FILE"
-
-                    sed -i -E \
-                    "s|(^[[:space:]]*image:[[:space:]]*).*/devops-monitor-backend:[^[:space:]]+|\\1${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}|" \
-                    "$BACKEND_FILE"
-
-                    grep -F "${ECR_FRONTEND}:${IMAGE_TAG}" "$FRONTEND_FILE"
-                    grep -F "${ECR_BACKEND}:${IMAGE_TAG}" "$BACKEND_FILE"
-
-                    git config user.name "Jenkins CI"
-                    git config user.email "jenkins@users.noreply.github.com"
-
-                    git add "$FRONTEND_FILE" "$BACKEND_FILE"
-
-                    if git diff --cached --quiet; then
-                        echo "No changes to commit."
-                    else
-                        git commit -m "Deploy application images ${IMAGE_TAG}"
-                    fi
-                '''
-
-                sh '''
-                    set +x
-
-                    AUTH_HEADER=$(printf "%s:%s" "$GIT_USERNAME" "$GIT_TOKEN" | base64 | tr -d '\\n')
-
-                    git -c http.extraheader="AUTHORIZATION: basic ${AUTH_HEADER}" \
-                        push origin "$GITOPS_BRANCH"
-
-                    unset AUTH_HEADER
-
-                    echo "GitOps repository push successful."
-                '''
-            }
+        always {
+            echo "Build Number: ${BUILD_NUMBER}"
+            echo "Job Name: ${JOB_NAME}"
         }
     }
 }
-
-
-
-post {
-
-    success {
-        echo '=========================================='
-        echo 'CI/CD PIPELINE COMPLETED SUCCESSFULLY'
-        echo '=========================================='
-
-        echo "Image Tag: ${IMAGE_TAG}"
-        echo "Frontend: ${ECR_REGISTRY}/${ECR_FRONTEND}:${IMAGE_TAG}"
-        echo "Backend: ${ECR_REGISTRY}/${ECR_BACKEND}:${IMAGE_TAG}"
-
-        echo 'GitOps repository updated.'
-        echo 'Argo CD will deploy the new images.'
-    }
-
-    failure {
-        echo 'Pipeline failed. Check Jenkins stage logs.'
-    }
-
-    always {
-        echo "Build Number: ${BUILD_NUMBER}"
-        echo "Job Name: ${JOB_NAME}"
-    }
-    }
