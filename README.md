@@ -310,4 +310,4 @@ Argo CD.
 
 ------------------------------------------------------------------------
 
-**Built as a hands-on DevOps portfolio project by Lozzbytech.**
+**Built as a hands-on DevOps portfolio project by Anurag Sharma.**
